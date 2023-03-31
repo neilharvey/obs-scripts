@@ -15,12 +15,21 @@ uniform float gamma_shift = 0.6;
 uniform float amplitude = 0.2;
 uniform float scale = 1.0;
 uniform int number_of_color_levels = 4.0;
+uniform float offset = 0.0;
 
 // Size of the source picture
-uniform int width;
+uniform int width; 
 uniform int height;
 
-// General properties
+// Pattern texture
+uniform Texture2D pattern_texture;
+uniform float2 pattern_size = {-1.0, -1.0};
+uniform float pattern_gamma = 1.0;
+
+// Palette texture
+uniform Texture2D palette_texture;
+uniform float2 palette_size = {-1.0, -1.0};
+uniform float palette_gamma = 1.0;
 
 // Interpolation method and wrap mode for sampling a texture
 SamplerState linear_clamp
@@ -29,6 +38,13 @@ SamplerState linear_clamp
     AddressU  = Clamp;      // Wrap / Clamp / Mirror / Border / MirrorOnce
     AddressV  = Clamp;      // Wrap / Clamp / Mirror / Border / MirrorOnce
     BorderColor = 00000000; // Used only with Border edges (optional)
+};
+
+SamplerState linear_wrap
+{
+    Filter    = Linear; 
+    AddressU  = Wrap;
+    AddressV  = Wrap;
 };
 
 // Data type of the input of the vertex shader
@@ -65,6 +81,25 @@ float3 encode_gamma(float3 color, float exponent)
     return pow(clamp(color, 0.0, 1.0), 1.0/exponent);
 }
 
+float4 get_perturbation(float2 position)
+{
+    if (pattern_size.x>0)
+    {
+        float2 pattern_uv = position / pattern_size;
+        float4 pattern_sample = pattern_texture.Sample(linear_wrap, pattern_uv / scale);
+        float3 linear_color = decode_gamma(pattern_sample.rgb, pattern_gamma, 0.0);
+        return float4(2.0*(linear_color-0.5), pattern_sample.a);
+    }
+    else
+        return float4((cos(PI*position.x/scale/4.0) * cos(PI*position.y/scale/4.0)).xxx, 1.0);
+}
+
+float4 get_closest_color(float3 input_color)
+{
+    float4 result;
+    result = float4(round((number_of_color_levels-1)*input_color)/(number_of_color_levels-1), 1.0);
+    return result;
+}
 
 // Pixel shader used to compute an RGBA color at a given pixel position
 float4 pixel_shader_halftone(pixel_data pixel) : TARGET
@@ -72,14 +107,14 @@ float4 pixel_shader_halftone(pixel_data pixel) : TARGET
     float4 source_sample = image.Sample(linear_clamp, pixel.uv);
     float3 linear_color = decode_gamma(source_sample.rgb, gamma, gamma_shift);
 
-    float luminance = dot(linear_color, float3(0.299, 0.587, 0.114));
     float2 position = pixel.uv * float2(width, height);
-    float perturbation = amplitude * cos(PI*position.x/scale/4.0) * cos(PI*position.y/scale/4.0);
-    float3 result = (luminance + perturbation).xxx;
+    float4 perturbation = get_perturbation(position);
 
-    result = round((number_of_color_levels-1)*result)/(number_of_color_levels-1);
+    float3 perturbed_color = linear_color + offset + amplitude*perturbation.rgb;
 
-    return float4(encode_gamma(result, gamma), source_sample.a);
+    float4 closest_color = get_closest_color(clamp(perturbed_color, 0.0, 1.0));
+
+    return float4(encode_gamma(closest_color.rgb, gamma), source_sample.a);
 }
 
 technique Draw
